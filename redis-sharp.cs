@@ -657,6 +657,11 @@ public class Redis : IDisposable {
 		SendExpectSuccess ("RPUSH {0} {1}\r\n{2}\r\n", key, value.Length, value);
 	}
 
+    public void LeftPush(string key, string value)
+    {
+        SendExpectSuccess("LPUSH {0} {1}\r\n{2}\r\n", key, value.Length, value);
+    }
+
 	public int ListLength (string key)
 	{
 		return SendExpectInt ("LLEN {0}\r\n", key);
@@ -673,6 +678,24 @@ public class Redis : IDisposable {
 		SendCommand ("LPOP {0}\r\n", key);
 		return ReadData ();
 	}
+
+    public string LeftPopString(string key)
+    {
+        return Encoding.UTF8.GetString(LeftPop(key));
+    }
+
+    public byte[] RightPop(string key)
+    {
+        SendCommand("RPOP {0}\r\n", key);
+        return ReadData();
+    }
+
+    public string RightPopString(string key)
+    {
+        return Encoding.UTF8.GetString(RightPop(key));
+    }
+
+
 	#endregion
 
 	#region Set commands
@@ -786,7 +809,31 @@ public class Redis : IDisposable {
 	}
 	#endregion
 
-	public void Dispose ()
+    #region PubSub
+
+    public void Publish(string channel, string message)
+	{
+        SendExpectSuccess("PUBLISH {0} {1}\r\n{2}\r\n", channel, message.Length, message);
+	}
+
+    public Channels Subscribe(params string[] channels)
+    {
+		var command = new StringBuilder();
+		command.Append("SUBSCRIBE");
+		foreach(var channel in channels)
+		{
+			command.Append(String.Format(" {0}", channel));  
+		}
+		command.Append("\r\n");
+		
+        SendCommand(command.ToString());
+        return new Channels(bstream);
+    }
+
+
+    #endregion
+
+    public void Dispose ()
 	{
 		Dispose (true);
 		GC.SuppressFinalize (this);
@@ -834,3 +881,76 @@ public class SortOptions {
 	}
 }
 
+
+public class Channels : IDisposable{
+	
+	private BufferedStream bstream;
+	private Action<string, string> messageAction;
+	private Action<string> subscribeAction;
+	private Action<string> unsubscribeAction;
+	
+	public Channels(BufferedStream stream)
+	{
+		bstream = stream;
+	}
+	
+	public void OnSubscribe(Action<string> action)
+	{
+		subscribeAction = action;	
+	}
+	
+	public void OnUnsubscribe(Action<string> action)
+	{
+		unsubscribeAction = action;
+	}
+	
+	public void OnMessage(Action<string, string> action)
+	{
+		messageAction = action;
+	}
+	
+	public void Listen()
+	{
+		var sb = new StringBuilder ();
+		int c;
+		
+		while ((c = bstream.ReadByte ()) != -1){	
+			if (c == '\r')
+				continue;
+			else if (c == '\n')
+			{				
+				sb.Append (',');
+				
+				var msgReceived = sb.ToString();
+				
+				if(msgReceived.Contains("unsubscribe") && msgReceived.Split(',').Count() == 7)
+				{
+					var channel = msgReceived.Split(',')[4];
+					if(unsubscribeAction != null)
+						unsubscribeAction.Invoke(channel);
+					sb = new StringBuilder();
+				}
+				else if(msgReceived.Contains("subscribe") && msgReceived.Split(',').Count() == 7)
+				{
+					var channel = msgReceived.Split(',')[4];
+					if(subscribeAction != null)
+						subscribeAction.Invoke(channel);
+					sb = new StringBuilder();
+				}
+				else if(msgReceived.Contains("message") && msgReceived.Split(',').Count() == 8)
+				{					
+					var channel = msgReceived.Split(',')[4];
+					var msg = msgReceived.Split(',')[6];
+					if(messageAction != null)
+						messageAction.Invoke(channel, msg);
+					sb = new StringBuilder();
+				}
+			}
+			else{
+				sb.Append ((char) c);
+			}	
+		}
+	}
+	
+	public void Dispose(){}
+}
