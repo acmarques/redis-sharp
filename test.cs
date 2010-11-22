@@ -1,6 +1,7 @@
 using System;
 using System.Text;
 using System.Collections.Generic;
+using System.Threading;
 
 class Test {
 	static void Main (string[] args)
@@ -124,6 +125,73 @@ class Test {
             Console.WriteLine("error: there should be no keys but there were {0}", r.Keys.Length);
 		
 		
+		//PubSub tests
+		
+		Thread publisher = new Thread(new ThreadStart(PublishItems));
+		Thread subscriber = new Thread(new ThreadStart(SubscribeForChannels));
+		
+		subscriber.Start();
+		publisher.Start();
+		
+		// Wait both to finish
+		publisher.Join();
+		subscriber.Join();
+		
+		assert(receivedMessages["first_channel"] == "Marafo,Bar foo", "Wrong messages for first channel");
+		assert(receivedMessages["second_channel"] == "Foo bar", "Wrong messages for second channel");
+		assert(receivedMessages["third_channel"] == "Manolo!", "Wrong messages for third channel");
+		
+	}
+	
+	
+	
+	private static Dictionary<string, string> receivedMessages = new Dictionary<string, string>();
+	private static int activeChannels = 3;
+	
+	static void PublishItems()
+	{
+		using(var redis = new Redis()){
+			redis.Publish("first_channel", "Marafo"); 
+			redis.Publish("second_channel", "Foo bar"); 
+			redis.Publish("first_channel", "Bar foo"); 
+			redis.Publish("third_channel", "Manolo!"); 
+		}
+	}
+	
+	static void SubscribeForChannels()
+	{
+		using(var redis = new Redis())
+		{
+			using(var channels = redis.Subscribe("first_channel", "second_channel", "third_channel"))
+			{
+				channels.OnSubscribe((channel) => Console.WriteLine("Subscribed to Channel: " + channel.ToString()));
+				
+				channels.OnMessage(delegate(string channel, string message){
+					Console.WriteLine("Channel: " + channel + ", Message: " + message);
+
+					if(receivedMessages.ContainsKey(channel)) 
+						receivedMessages[channel] =  String.Format("{0},{1}", receivedMessages[channel].ToString(), message);
+					else
+						receivedMessages.Add(channel, message);
+					
+					// if all messages have been received, unsubscribe
+					if(receivedMessages.Count == 3)
+						redis.Unsubscribe("first_channel", "second_channel", "third_channel");
+				});
+				
+				channels.OnUnsubscribe(delegate (string channel){ 
+					Console.WriteLine("Unsubscribed from Channel: " + channel.ToString());
+					activeChannels--;
+					
+					// No more active channels, stop listening
+					if(activeChannels == 0)
+						channels.StopListening();
+				});
+				
+				// Start listening for messages in the subscribed channels
+				channels.Listen();
+			}
+		}
 	}
 
     static void assert(bool condition, string message)

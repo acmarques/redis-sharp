@@ -830,7 +830,19 @@ public class Redis : IDisposable {
         return new Channels(bstream);
     }
 
-
+	public void Unsubscribe(params string[] channels)
+    {
+		var command = new StringBuilder();
+		command.Append("UNSUBSCRIBE");
+		foreach(var channel in channels)
+		{
+			command.Append(String.Format(" {0}", channel));  
+		}
+		command.Append("\r\n");
+		
+        SendCommand(command.ToString());
+    }
+	
     #endregion
 
     public void Dispose ()
@@ -888,6 +900,7 @@ public class Channels : IDisposable{
 	private Action<string, string> messageAction;
 	private Action<string> subscribeAction;
 	private Action<string> unsubscribeAction;
+	private bool shouldListen = true;
 	
 	public Channels(BufferedStream stream)
 	{
@@ -914,7 +927,7 @@ public class Channels : IDisposable{
 		var sb = new StringBuilder ();
 		int c;
 		
-		while ((c = bstream.ReadByte ()) != -1){	
+		while (shouldListen && (c = bstream.ReadByte ()) != -1){	
 			if (c == '\r')
 				continue;
 			else if (c == '\n')
@@ -924,7 +937,7 @@ public class Channels : IDisposable{
 				var msgReceived = sb.ToString();
 				
 				if(msgReceived.Contains("unsubscribe") && msgReceived.Split(',').Count() == 7)
-				{
+				{	
 					var channel = msgReceived.Split(',')[4];
 					if(unsubscribeAction != null)
 						unsubscribeAction.Invoke(channel);
@@ -950,6 +963,11 @@ public class Channels : IDisposable{
 				sb.Append ((char) c);
 			}	
 		}
+	}
+	
+	public void StopListening()
+	{
+		shouldListen = false;
 	}
 	
 	public void Dispose(){}
